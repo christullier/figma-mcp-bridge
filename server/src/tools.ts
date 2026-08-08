@@ -27,8 +27,19 @@ import {
   ungroupNodeInput,
   setTextPropertiesShape,
   setTextPropertiesInput,
+  getCommentsInput,
+  postCommentShape,
+  postCommentInput,
+  deleteCommentInput,
+  reactToCommentInput,
   toolInputSchemas,
 } from "./schema.js";
+import {
+  deleteComment,
+  getComments,
+  postComment,
+  reactToComment,
+} from "./comments.js";
 import type { BridgeResponse } from "./types.js";
 import { Follower } from "./follower.js";
 
@@ -657,6 +668,118 @@ export function registerTools(
       }
     }
   );
+
+  server.tool(
+    "get_comments",
+    "Read the comment threads on a Figma file, with replies nested under each thread. Resolved threads are omitted unless includeResolved is true. Requires FIGMA_TOKEN. When multiple files are connected, specify fileKey.",
+    getCommentsInput.shape,
+    async ({ includeResolved, fileKey }): Promise<ToolResult> => {
+      return renderRest(async () => {
+        const key = await resolveFileKey(node, port, fileKey);
+        return getComments(key, includeResolved ?? false);
+      });
+    }
+  );
+
+  server.tool(
+    "post_comment",
+    "Post a comment on a Figma file: a new thread, a reply to an existing thread (replyToCommentId), and optionally pinned to a node or canvas position. This is visible to everyone with access to the file. Requires FIGMA_TOKEN with write access. When multiple files are connected, specify fileKey.",
+    postCommentShape.shape,
+    async (args): Promise<ToolResult> => {
+      const parsed = parseToolInput(postCommentInput, args);
+      if (!parsed.success) return parsed.error;
+      const { message, replyToCommentId, nodeId, x, y, fileKey } = parsed.data;
+
+      return renderRest(async () => {
+        const key = await resolveFileKey(node, port, fileKey);
+        return postComment(key, message, replyToCommentId, { nodeId, x, y });
+      });
+    }
+  );
+
+  server.tool(
+    "delete_comment",
+    "Delete a comment. Deleting a thread's root comment deletes its replies too. This is destructive and requires confirm: true. Requires FIGMA_TOKEN, and the token's account must own the comment. When multiple files are connected, specify fileKey.",
+    deleteCommentInput.shape,
+    async ({ commentId, fileKey }): Promise<ToolResult> => {
+      return renderRest(async () => {
+        const key = await resolveFileKey(node, port, fileKey);
+        await deleteComment(key, commentId);
+        return { deleted: commentId };
+      });
+    }
+  );
+
+  server.tool(
+    "react_to_comment",
+    "Add or remove an emoji reaction on a comment. Requires FIGMA_TOKEN with write access. When multiple files are connected, specify fileKey.",
+    reactToCommentInput.shape,
+    async ({ commentId, emoji, remove, fileKey }): Promise<ToolResult> => {
+      return renderRest(async () => {
+        const key = await resolveFileKey(node, port, fileKey);
+        await reactToComment(key, commentId, emoji, remove ?? false);
+        return { commentId, emoji, removed: remove ?? false };
+      });
+    }
+  );
+}
+
+/**
+ * Resolves the file key for a REST call, defaulting to the sole connected file.
+ *
+ * Comment tools bypass the bridge, so they cannot lean on its implicit
+ * single-file routing — but asking for a fileKey when only one file is open
+ * would be needless friction, so mirror that behaviour here.
+ * @param node - The node coordinator for leader/follower routing.
+ * @param port - The port used for follower-to-leader HTTP calls.
+ * @param fileKey - An explicit file key, if the caller supplied one.
+ * @returns The file key to use.
+ */
+async function resolveFileKey(
+  node: Node,
+  port: number,
+  fileKey?: string
+): Promise<string> {
+  if (fileKey) return fileKey;
+
+  let files = node.listConnectedFiles();
+  if (files === undefined) {
+    files = await new Follower(`http://localhost:${port}`).listConnectedFiles();
+  }
+
+  if (files.length === 1) return files[0].fileKey;
+  if (files.length === 0) {
+    throw new Error(
+      "No Figma file is connected. Pass fileKey explicitly, or open the Figma MCP Bridge plugin in the file you want to comment on."
+    );
+  }
+  throw new Error(
+    `Multiple files are connected — pass fileKey. Connected: ${files
+      .map((f) => `${f.fileName} (${f.fileKey})`)
+      .join(", ")}`
+  );
+}
+
+/**
+ * Wraps a Figma REST call and converts the result into a tool result.
+ *
+ * The bridge equivalent is renderResponse; REST calls signal failure by
+ * throwing rather than by returning a BridgeResponse with an `error` field.
+ * @param fn - REST call to execute.
+ * @returns Tool result with the JSON payload or an error message.
+ */
+async function renderRest(fn: () => Promise<unknown>): Promise<ToolResult> {
+  try {
+    const data = await fn();
+    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+  } catch (err) {
+    return {
+      content: [
+        { type: "text", text: err instanceof Error ? err.message : String(err) },
+      ],
+      isError: true,
+    };
+  }
 }
 
 /**

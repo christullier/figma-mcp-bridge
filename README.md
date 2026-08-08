@@ -102,8 +102,51 @@ If you want to know more about how it works, read the [How it works](#how-it-wor
 | `set_selection` | Set the page selection to a list of node IDs (works in Dev Mode) |
 | `scroll_and_zoom_into_view` | Frame the viewport around the given nodes (works in Dev Mode) |
 | `delete_nodes` | Delete nodes with explicit confirmation |
+| `get_comments` | Read comment threads on a file, replies nested under each thread |
+| `post_comment` | Post a comment or reply, optionally pinned to a node or canvas position |
+| `react_to_comment` | Add or remove an emoji reaction on a comment |
+| `delete_comment` | Delete a comment with explicit confirmation |
 
 All tools accept an optional `fileKey` parameter when multiple Figma files are connected. Use `list_files` to discover connected files and their keys.
+
+### Comments
+
+Figma's Plugin API exposes no comment surface, so the comment tools are the one
+part of this server that does not go through the plugin bridge — they call the
+Figma REST API directly. That means they need a token:
+
+1. In Figma, go to `Settings > Security > Personal access tokens` and generate a
+   token with the **File comments** scope (read-only is enough for
+   `get_comments`; write is needed to post, react, or delete).
+2. Pass it to the MCP server as `FIGMA_TOKEN`:
+
+```json
+{
+  "figma-bridge": {
+    "command": "npx",
+    "args": ["-y", "@gethopp/figma-mcp-bridge"],
+    "env": { "FIGMA_TOKEN": "figd_..." }
+  }
+}
+```
+
+`FIGMA_ACCESS_TOKEN` and `FIGMA_PERSONAL_ACCESS_TOKEN` are accepted as aliases.
+Without a token the comment tools return a clear error; every other tool is
+unaffected.
+
+Notes:
+
+- Comments are visible to everyone with access to the file — `post_comment`
+  writes to a shared surface, not a local scratchpad.
+- `fileKey` resolves the same way as elsewhere: it defaults to the sole
+  connected file, so the plugin must be open in that file (or pass `fileKey`
+  explicitly — comment tools work on any file the token can see, plugin or not).
+- Replies inherit their thread's pin, so `nodeId`/`x`/`y` are ignored when
+  `replyToCommentId` is set.
+- `delete_comment` only works on comments authored by the token's own account.
+- Figma's REST API has no endpoint for resolving a thread, so there is no
+  `resolve_comment` tool. `get_comments` reports `resolvedAt` and hides resolved
+  threads by default.
 
 ### Editing Notes
 

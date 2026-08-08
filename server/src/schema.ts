@@ -640,6 +640,93 @@ export const createImageInput = z.object({
   fileKey: fileKeyField,
 });
 
+/*
+ * Comment schemas are deliberately kept out of `toolInputSchemas`: comment
+ * tools hit the Figma REST API directly rather than travelling over the plugin
+ * bridge, so they never go through RPC input validation.
+ */
+
+export const getCommentsInput = z.object({
+  includeResolved: z
+    .boolean()
+    .optional()
+    .describe("Include resolved comment threads. Defaults to false."),
+  fileKey: fileKeyField,
+});
+
+export const postCommentShape = z.object({
+  message: z
+    .string()
+    .min(1, "message must not be empty")
+    .describe("The comment text to post."),
+  replyToCommentId: z
+    .string()
+    .optional()
+    .describe(
+      "Post as a reply to this comment thread instead of starting a new one. Use the thread id from get_comments."
+    ),
+  nodeId: createFigmaNodeIdSchema()
+    .optional()
+    .describe(
+      "Pin the comment to this node. Ignored when replyToCommentId is set (replies inherit the thread's pin)."
+    ),
+  x: z
+    .number()
+    .optional()
+    .describe(
+      "Pin x coordinate: offset within the node when nodeId is given, otherwise an absolute canvas position (requires y)."
+    ),
+  y: z
+    .number()
+    .optional()
+    .describe(
+      "Pin y coordinate: offset within the node when nodeId is given, otherwise an absolute canvas position (requires x)."
+    ),
+  fileKey: fileKeyField,
+});
+
+export const postCommentInput = postCommentShape.superRefine((value, ctx) => {
+  if (value.nodeId) return;
+  const hasX = value.x !== undefined;
+  const hasY = value.y !== undefined;
+  if (hasX !== hasY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "A canvas pin needs both x and y. Pass nodeId instead to pin to a node.",
+    });
+  }
+});
+
+export const deleteCommentInput = z.object({
+  commentId: z
+    .string()
+    .min(1, "commentId must not be empty")
+    .describe(
+      "The comment to delete. Deleting a thread's root comment also deletes its replies."
+    ),
+  confirm: z
+    .literal(true)
+    .describe("Must be true. Deleting a comment cannot be undone."),
+  fileKey: fileKeyField,
+});
+
+export const reactToCommentInput = z.object({
+  commentId: z
+    .string()
+    .min(1, "commentId must not be empty")
+    .describe("The comment to react to."),
+  emoji: z
+    .string()
+    .min(1, "emoji must not be empty")
+    .describe("Emoji shortcode, e.g. ':eyes:' or ':thumbs_up:'."),
+  remove: z
+    .boolean()
+    .optional()
+    .describe("Remove this reaction instead of adding it. Defaults to false."),
+  fileKey: fileKeyField,
+});
+
 export const toolInputSchemas = {
   get_document: z.object({
     fileKey: fileKeyField,
